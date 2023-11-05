@@ -1,11 +1,17 @@
 import discord
+
+import voice_node
 from voice_node import Voice
 from discord.ext import commands
 
 intents = discord.Intents.all()
 
 bot = commands.Bot(command_prefix='fbt!', intents=intents)
+bot.voice_manager = voice_node.NodeManager()
 
+@bot.event
+async def setup_hook():
+    await bot.voice_manager.add_nodes(["http://localhost:8080", "hi"])
 
 @bot.event
 async def on_ready():

@@ -1,33 +1,39 @@
 import asyncio
 import os
-from typing import Union
+from typing import Union, List
 
 import aiohttp
 import discord
 
 
 class Node:
-    def __init__(self, host, region):
+    def __init__(self, host, region, auth):
         self.host = host
         self.region = region
+        self.auth = auth
 
     async def connect(self):
-        session = aiohttp.ClientSession()
-        ws = await session.ws_connect(f"https://{self.host}/voice")
+        headers = {"Authorization": self.auth}
+        session = aiohttp.ClientSession(base_url=self.host, headers=headers)
+        ws = await session.ws_connect(f"/voice")
         return session, ws
 
     async def status(self):
-        await req_get(self.host, "/status")
-        return
+        try:
+            return (await req_get(self.host, "/status", self.auth, 3))["full_processes_memory"], self
+        except BaseException:
+            return
 
 
 
-async def req_get(host, path):
-    async with aiohttp.ClientSession(base_url=host) as s:
-        async with s.get(path) as r:
+async def req_get(host, path, auth, timeout=60):
+    headers = {"Authorization": auth}
+    async with aiohttp.ClientSession(base_url=host, headers=headers) as s:
+        async with s.get(path, timeout=timeout) as r:
             return await r.json()
 
 
+# noinspection PyMethodMayBeStatic
 class NodeManager:
     DEFAULT_REGIONS_BY_RTC = {
         'asia': ('hongkong', 'singapore', 'sydney', 'japan', 'india'),
@@ -53,17 +59,49 @@ class NodeManager:
                 return k
 
     async def add_nodes(self, *args):
-        for i in args:
-            out = await req_get(i, "/region")
+        for i, v in args:
+            try:
+                out = await req_get(i, "/region", v)
+            except BaseException:
+                continue
             region = self.check_region(out["continent"])
-            node_class = Node(i, region)
+            node_class = Node(i, region, v)
             self.NODE[region].append(node_class)
+
+    def get_all_nodes(self):
+        return [v2 for i in self.NODE.values() for v2 in i]
+
+    async def get_all_nodes_status(self, nodes: List[Node]):
+        out_status = await asyncio.gather(*[i.status() for i in nodes])
+        ok_host = [i for i in out_status if i is not None]
+        return ok_host
+
+    async def get_best_node(self, region=None):
+        is_region = False
+        all_nodes = None
+        if region is not None:
+            for k, v in self.DEFAULT_REGIONS_BY_RTC.items():
+                if region not in v:
+                    continue
+                if len(self.NODE[k]) > 0:
+                    all_nodes = self.NODE[k]
+                break
+        if all_nodes is None:
+            all_nodes = self.get_all_nodes()
+        out = await self.get_all_nodes_status(all_nodes)
+        if len(out) == 0:
+            raise Exception("ALL NODES IS DOWN")
+        best_out = min(out, key=lambda p: p[0])
+        return best_out[1]
 
     def __init__(self):
         pass
 
+
 class Voice(discord.VoiceClient):
     def __init__(self, client: discord.Client, channel: Union[discord.channel.VoiceChannel, discord.abc.Connectable]):
+        self.node_manager: NodeManager = client.voice_manager
+        self.node = None
         self.session = None
         self.callback = None
         self.volume = 100
@@ -120,13 +158,13 @@ class Voice(discord.VoiceClient):
         await self.disconnect()
 
     async def connect_ws(self):
-        self.session = aiohttp.ClientSession()
-        self.ws = await self.session.ws_connect("http://localhost:8080/voice")
+        self.session, self.ws = await self.node.connect()
         asyncio.create_task(self.ws_read())
         asyncio.create_task(self.heartbeat())
 
     async def connect(self, *, timeout: float = 60.0, reconnect: bool = True, self_deaf: bool = False,
                       self_mute: bool = False) -> None:
+        self.node = await self.node_manager.get_best_node(self.channel.rtc_region)
         try:
             await self.connect_ws()
             self.ready.set()
