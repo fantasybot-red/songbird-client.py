@@ -8,17 +8,21 @@ intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='fbt!', intents=intents)
 bot.voice_manager = songbird.NodeManager()
 
+
 @bot.event
 async def setup_hook():
     await bot.voice_manager.add_nodes(["http://localhost:8080", "hi"])
+
 
 @bot.event
 async def on_ready():
     print(f'Bot is ready. Logged in as {bot.user.name}')
 
+
 class Voice(VoiceClientModel):
     def __init__(self, *args, **kwargs):
         super().__init__("voice_manager", *args, **kwargs)
+
 
 @bot.command(name="p")
 async def _in(ctx: commands.Context, *, data):
@@ -38,6 +42,7 @@ async def _in(ctx: commands.Context, *, data):
         if is_err:
             await mess.edit(content="audio Error")
         await ctx.guild.voice_client.disconnect()
+
     await ctx.guild.voice_client.play(data, print_data)
     mess = await ctx.send(f'Playing: {data}')
 
