@@ -78,6 +78,7 @@ class NodeManager:
         return ok_host
 
     async def get_best_node(self, region=None):
+        await self.check_node()
         all_nodes = None
         if region is not None:
             for k, v in self.DEFAULT_REGIONS_BY_RTC.items():
@@ -98,12 +99,16 @@ class NodeManager:
         self._is_started = False
         pass
 
-    async def _start(self):
-        self._is_started = True
-        while True:
+    async def check_node(self):
+        if self.UNKNOWN_NODE:
             cache_list = self.UNKNOWN_NODE.copy()
             self.UNKNOWN_NODE.clear()
             await self.add_nodes(*cache_list)
+
+    async def _start(self):
+        self._is_started = True
+        while True:
+            await self.check_node()
             await asyncio.sleep(300)
 
 
