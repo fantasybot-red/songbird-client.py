@@ -3,6 +3,11 @@ import aiohttp
 import discord
 from typing import Union, List
 
+
+class SongBirdError(Exception):
+    pass
+
+
 class Node:
     def __init__(self, host, region, auth):
         self.host = host
@@ -93,7 +98,7 @@ class NodeManager:
             all_nodes = self.get_all_nodes()
         out = await self.get_all_nodes_status(all_nodes)
         if len(out) == 0:
-            raise Exception("ALL NODES IS DOWN")
+            raise SongBirdError("ALL NODES IS DOWN")
         best_out = min(out, key=lambda p: p[0])
         return best_out[1]
 
@@ -119,7 +124,7 @@ class VoiceClientModel(discord.VoiceClient):
                  channel: Union[discord.channel.VoiceChannel, discord.abc.Connectable]):
         self.node_manager: NodeManager = getattr(client, node_manager_key, None)
         if type(self.node_manager) is not NodeManager:
-            raise Exception(f"{type(self.node_manager).__name__} is not NodeManager")
+            raise SongBirdError(f"{type(self.node_manager).__name__} is not NodeManager")
         self.node = None
         self.session = None
         self.callback = None
