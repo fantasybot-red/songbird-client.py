@@ -68,8 +68,7 @@ class NodeManager:
         for i, v in args:
             try:
                 out = await req_get(i, "/region", v)
-            except BaseException as e:
-                print(e)
+            except BaseException:
                 self.UNKNOWN_NODE.append((i, v))
                 continue
             region = self.check_region(out["continent"])
@@ -120,20 +119,23 @@ class NodeManager:
 
 
 class VoiceClientModel(discord.VoiceClient):
+
+    node = None
+    callback = None
+    volume = 100
+    ready = asyncio.Event()
+    session = None
+    ws = None
+    _is_paused = False
+
     def __init__(self, node_manager_key: str, client: discord.Client,
                  channel: Union[discord.channel.VoiceChannel, discord.abc.Connectable]):
         self.node_manager: NodeManager = getattr(client, node_manager_key, None)
         if type(self.node_manager) is not NodeManager:
             raise SongBirdError(f"{type(self.node_manager).__name__} is not NodeManager")
-        self.node = None
-        self.session = None
-        self.callback = None
-        self.volume = 100
-        self.ready = asyncio.Event()
-        self.ws = None
         self.client = client
         self.channel = channel
-        self._is_paused = False
+
 
     def is_paused(self):
         return self._is_paused
