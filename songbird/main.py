@@ -18,7 +18,8 @@ class Node:
     async def status(self):
         try:
             return (await req_get(self.host, "/status", self.auth, 3))["full_processes_memory"], self
-        except BaseException:
+        except BaseException as e:
+            print(e)
             return
 
 
@@ -62,7 +63,8 @@ class NodeManager:
         for i, v in args:
             try:
                 out = await req_get(i, "/region", v)
-            except BaseException:
+            except BaseException as e:
+                print(e)
                 self.UNKNOWN_NODE.append((i, v))
                 continue
             region = self.check_region(out["continent"])

@@ -11,7 +11,7 @@ bot.voice_manager = songbird.NodeManager()
 
 @bot.event
 async def setup_hook():
-    await bot.voice_manager.add_nodes(["http://localhost:8080", "hi"])
+    await bot.voice_manager.add_nodes(["http://192.168.1.14:1999", "5a21b246343746f98f013532f61dee5b"])
 
 
 @bot.event
