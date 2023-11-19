@@ -198,11 +198,14 @@ class VoiceClientModel(discord.VoiceClient):
             self.ready.set()
             raise e
 
-    async def play(self, data, after=None):
+    async def play(self, data, type=None, after=None):
         await self.ready.wait()
         await self.ws.send_json({
             "t": "PLAY",
-            "d": data
+            "d": {
+                "url": data,
+                "type": type
+            }
         })
         self.callback = after
 

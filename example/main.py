@@ -12,9 +12,9 @@ bot.voice_manager = songbird.NodeManager()
 @bot.event
 async def setup_hook():
     # auth
-    await bot.voice_manager.add_nodes(["http://localhost:80", "test123"])
+    await bot.voice_manager.add_nodes(["http://localhost:8080", "hi"])
     # no auth
-    await bot.voice_manager.add_nodes(["http://localhost:80", None])
+    # await bot.voice_manager.add_nodes(["http://localhost:8080", None])
 
 
 @bot.event
@@ -43,11 +43,12 @@ async def _in(ctx: commands.Context, *, data):
         await ctx.send(f'Joined voice channel: {voice_channel.name}')
 
     async def print_data(is_err):
+        print(is_err)
         if is_err:
             await mess.edit(content="audio Error")
         await ctx.guild.voice_client.disconnect()
-
-    await ctx.guild.voice_client.play(data, print_data)
+    # type == None for url == "youtube" for youtube video support
+    await ctx.guild.voice_client.play(data, type="youtube", after=print_data)
     mess = await ctx.send(f'Playing: {data}')
 
 
@@ -79,6 +80,5 @@ async def _out(ctx: commands.Context):
 
     await ctx.voice_client.disconnect()
     await ctx.send("Left the voice channel.")
-
 
 bot.run('bot token')
