@@ -14,7 +14,7 @@ async def setup_hook():
     # auth
     await bot.voice_manager.add_nodes(["http://localhost:8080", "hi"])
     # no auth
-    # await bot.voice_manager.add_nodes(["http://localhost:8080", None])
+    await bot.voice_manager.add_nodes(["http://localhost:8080", None])
 
 
 @bot.event

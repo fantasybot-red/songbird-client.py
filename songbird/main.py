@@ -1,4 +1,6 @@
 import asyncio
+import random
+
 import aiohttp
 import discord
 from typing import Union, List
@@ -22,7 +24,7 @@ class Node:
 
     async def status(self):
         try:
-            return (await req_get(self.host, "/status", self.auth, 3))["full_processes_memory"], self
+            return (await req_get(self.host, "/status", self.auth, 3))["players"], self
         except BaseException as e:
             print(e)
             return
@@ -98,7 +100,7 @@ class NodeManager:
         out = await self.get_all_nodes_status(all_nodes)
         if len(out) == 0:
             raise SongBirdError("ALL NODES IS DOWN")
-        best_out = min(out, key=lambda p: p[0])
+        best_out = min(out, key=lambda p: p[0] + random.random())
         return best_out[1]
 
     def __init__(self):
