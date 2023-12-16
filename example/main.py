@@ -1,7 +1,15 @@
+import io
+
 import discord
+import numpy
+import pydub
+
 import songbird
+from shazamio import Shazam
 from songbird import VoiceClientModel
 from discord.ext import commands
+
+from songbird.main import empty_audio
 
 intents = discord.Intents.all()
 
@@ -12,7 +20,7 @@ bot.voice_manager = songbird.NodeManager()
 @bot.event
 async def setup_hook():
     # auth
-    await bot.voice_manager.add_nodes(["http://localhost:8080", "hi"])
+    # await bot.voice_manager.add_nodes(["http://localhost:8080", "hi"])
     # no auth
     await bot.voice_manager.add_nodes(["http://localhost:8080", None])
 
@@ -23,13 +31,30 @@ async def on_ready():
 
 
 class Voice(VoiceClientModel):
+    decode_mode = True # set True if you want to decode voice packet default ís False
+
     def __init__(self, *args, **kwargs):
         # set same key name that you to set NodeManager in bot
         super().__init__("voice_manager", *args, **kwargs)
 
 
+@bot.command(name="in")
+async def _in(ctx: commands.Context):
+    if ctx.author.voice is None:
+        await ctx.send("You are not connected to a voice channel.")
+        return
+    elif ctx.guild.voice_client is None:
+        if ctx.author.voice is None:
+            await ctx.send("You are not connected to a voice channel.")
+            return
+
+        voice_channel = ctx.author.voice.channel
+        voice_client = await voice_channel.connect(cls=Voice)
+        await ctx.send(f'Joined voice channel: {voice_channel.name}')
+
+
 @bot.command(name="p")
-async def _in(ctx: commands.Context, *, data):
+async def play(ctx: commands.Context, *, data):
     if ctx.author.voice is None:
         await ctx.send("You are not connected to a voice channel.")
         return
@@ -47,13 +72,14 @@ async def _in(ctx: commands.Context, *, data):
         if is_err:
             await mess.edit(content="audio Error")
         await ctx.guild.voice_client.disconnect()
+
     # type == None for url == "youtube" for youtube video support
     await ctx.guild.voice_client.play(data, type="youtube", after=print_data)
     mess = await ctx.send(f'Playing: {data}')
 
 
 @bot.command(name="rs")
-async def _in(ctx: commands.Context):
+async def rs(ctx: commands.Context):
     if ctx.author.voice is None:
         await ctx.send("You are not connected to a voice channel.")
         return
@@ -61,6 +87,18 @@ async def _in(ctx: commands.Context):
         await ctx.guild.voice_client.resume()
     else:
         await ctx.guild.voice_client.pause()
+
+
+@bot.command(name="record_flush")
+async def record_flush(ctx: commands.Context):
+    if ctx.author.voice is None:
+        await ctx.send("You are not connected to a voice channel.")
+        return
+    out:pydub.AudioSegment = await ctx.guild.voice_client.flush_all()
+    out_file = io.BytesIO()
+    out.export(out_file, format="wav")
+    file = discord.File(out_file, filename="output.wav")
+    await ctx.send("Done", file=file)
 
 
 @bot.command(name="volume")

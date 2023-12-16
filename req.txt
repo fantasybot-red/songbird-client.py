@@ -1,3 +1,6 @@
 aiohttp
-discord.py
 setuptools
+discord.py
+numpy
+pydub
+pedalboard

@@ -1,9 +1,14 @@
 import asyncio
+import base64
+import io
 import random
-
+import time
+from typing import Union, List
 import aiohttp
 import discord
-from typing import Union, List
+import pedalboard
+import pydub
+from pedalboard_native.io import AudioFile
 
 
 class SongBirdError(Exception):
@@ -26,7 +31,6 @@ class Node:
         try:
             return (await req_get(self.host, "/status", self.auth, 3))["players"], self
         except BaseException as e:
-            print(e)
             return
 
 
@@ -70,7 +74,8 @@ class NodeManager:
         for i, v in args:
             try:
                 out = await req_get(i, "/region", v)
-            except BaseException:
+            except BaseException as e:
+                print(e)
                 self.UNKNOWN_NODE.append((i, v))
                 continue
             region = self.check_region(out["continent"])
@@ -120,8 +125,17 @@ class NodeManager:
             await asyncio.sleep(300)
 
 
-class VoiceClientModel(discord.VoiceClient):
+def empty_audio(*, ms, samplerate=48000, num_channels=2):
+    import numpy
+    sec = ms / 1000
+    data = numpy.zeros((num_channels, int(samplerate * sec)), dtype=numpy.float32)
+    return data
 
+
+class VoiceClientModel(discord.VoiceClient):
+    audio_list = {}
+    khown_ssrc = {}
+    decode_mode = False
     node = None
     callback = None
     volume = 100
@@ -137,7 +151,6 @@ class VoiceClientModel(discord.VoiceClient):
             raise SongBirdError(f"{type(self.node_manager).__name__} is not NodeManager")
         self.client = client
         self.channel = channel
-
 
     def is_paused(self):
         return self._is_paused
@@ -170,15 +183,67 @@ class VoiceClientModel(discord.VoiceClient):
             else:
                 break
 
+    def sync_flush_all(self):
+        list_voice = []
+        data_all = self.audio_list.copy().items()
+        for k, v in data_all:
+            data = io.BytesIO()
+            with AudioFile(data, "w", samplerate=48000, num_channels=2, format="wav") as fs:
+                start_time = None
+                last_time = False
+                for i in v:
+                    if start_time is None:
+                        start_time = i["got_at"]
+                    sem = i["data"]
+                    sem.seek(0)
+                    with AudioFile(sem, "r") as f_sem:
+                        d = f_sem.duration * 1000
+                        if i["got_at"] - int(last_time) - int(d) > 30 and last_time is not False:
+                            fs.write(empty_audio(ms=int(i["got_at"] - last_time - d)))
+                        fs.write(f_sem.read(f_sem.samplerate * f_sem.frames))
+                        last_time = i["got_at"]
+            list_voice.append({"start_time": start_time, "data": pydub.AudioSegment.from_file(data, format="wav"), "last_time": last_time})
+        if len(list_voice) == 0:
+            return None
+        min_time = min(list_voice, key=lambda x: x["start_time"])
+        max_time = min(list_voice, key=lambda x: x["last_time"])
+        list_voice.remove(min_time)
+        min_time["data"] = min_time["data"] + pydub.AudioSegment.silent(duration=(max_time["last_time"] - min_time["last_time"]))
+        for i in list_voice:
+            min_time["data"] = min_time["data"].overlay(i["data"], i["start_time"] - min_time["start_time"])
+        return min_time["data"]
+
+    async def flush_all(self):
+        return await asyncio.to_thread(self.sync_flush_all)
+
+    async def decode_voice_packet(self, data):
+        bytes_data = base64.urlsafe_b64decode(data["data"])
+        audio_bytes = io.BytesIO(bytes_data)
+        audio_dict = {"data": audio_bytes, "got_at": time.time() * 1000}
+        if self.audio_list.get(data['ssrc']):
+            self.audio_list[data['ssrc']].append(audio_dict)
+        else:
+            self.audio_list[data['ssrc']] = [audio_dict]
+
     async def ws_read(self):
         async for i in self.ws:
-            data = i.json()
-            if data['t'] == "STOP" and self.callback is not None:
-                asyncio.create_task(self.callback(False))
-                self._is_paused = False
-            elif data['t'] == "STOP_ERROR" and self.callback is not None:
-                asyncio.create_task(self.callback(True))
-                self._is_paused = False
+            if i.type == aiohttp.WSMsgType.TEXT:
+                data = i.json()
+                if data['t'] == "STOP" and self.callback is not None:
+                    asyncio.create_task(self.callback(False))
+                    self._is_paused = False
+                elif data['t'] == "STOP_ERROR" and self.callback is not None:
+                    asyncio.create_task(self.callback(True))
+                    self._is_paused = False
+                elif data['t'] == "VOICE_PACKET":
+                    if self.decode_mode:
+                        asyncio.create_task(self.decode_voice_packet(data['d']))
+                elif data['t'] == "SSRC_UPDATE":
+                    self.khown_ssrc[data['d']['ssrc']] = data['d']['user']
+            elif i.type == aiohttp.WSMsgType.CLOSED:
+                break
+            elif i.type == aiohttp.WSMsgType.ERROR:
+                break
         await self.ws.close()
         await self.session.close()
         await self.disconnect()
