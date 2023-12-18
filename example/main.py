@@ -63,18 +63,16 @@ async def play(ctx: commands.Context, *, data):
             await ctx.send("You are not connected to a voice channel.")
             return
 
-        voice_channel = ctx.author.voice.channel
-        voice_client = await voice_channel.connect(cls=Voice)
-        await ctx.send(f'Joined voice channel: {voice_channel.name}')
+    voice_client = await ctx.author.voice.channel.connect(cls=Voice)
 
     async def print_data(is_err):
         print(is_err)
         if is_err:
             await mess.edit(content="audio Error")
-        await ctx.guild.voice_client.disconnect()
+        await voice_client.disconnect()
 
     # type == None for url == "youtube" for youtube video support
-    await ctx.guild.voice_client.play(data, type="youtube", after=print_data)
+    await voice_client.play(data, after=print_data)
     mess = await ctx.send(f'Playing: {data}')
 
 

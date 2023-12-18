@@ -140,6 +140,7 @@ class VoiceClientModel(discord.VoiceClient):
     callback = None
     volume = 100
     ready = asyncio.Event()
+    connected = asyncio.Event()
     session = None
     ws = None
     _is_paused = False
@@ -202,13 +203,15 @@ class VoiceClientModel(discord.VoiceClient):
                             fs.write(empty_audio(ms=int(i["got_at"] - last_time - d)))
                         fs.write(f_sem.read(f_sem.samplerate * f_sem.frames))
                         last_time = i["got_at"]
-            list_voice.append({"start_time": start_time, "data": pydub.AudioSegment.from_file(data, format="wav"), "last_time": last_time})
+            list_voice.append({"start_time": start_time, "data": pydub.AudioSegment.from_file(data, format="wav"),
+                               "last_time": last_time})
         if len(list_voice) == 0:
             return None
         min_time = min(list_voice, key=lambda x: x["start_time"])
         max_time = min(list_voice, key=lambda x: x["last_time"])
         list_voice.remove(min_time)
-        min_time["data"] = min_time["data"] + pydub.AudioSegment.silent(duration=(max_time["last_time"] - min_time["last_time"]))
+        min_time["data"] = min_time["data"] + pydub.AudioSegment.silent(
+            duration=(max_time["last_time"] - min_time["last_time"]))
         for i in list_voice:
             min_time["data"] = min_time["data"].overlay(i["data"], i["start_time"] - min_time["start_time"])
         return min_time["data"]
@@ -229,7 +232,9 @@ class VoiceClientModel(discord.VoiceClient):
         async for i in self.ws:
             if i.type == aiohttp.WSMsgType.TEXT:
                 data = i.json()
-                if data['t'] == "STOP" and self.callback is not None:
+                if data['t'] == "CONNECTED":
+                    self.connected.set()
+                elif data['t'] == "STOP" and self.callback is not None:
                     asyncio.create_task(self.callback(False))
                     self._is_paused = False
                 elif data['t'] == "STOP_ERROR" and self.callback is not None:
@@ -258,15 +263,17 @@ class VoiceClientModel(discord.VoiceClient):
         self.node = await self.node_manager.get_best_node(self.channel.rtc_region)
         try:
             await self.connect_ws()
-            self.ready.set()
+            self.ready.set()  # for safety
             await self.channel.guild.change_voice_state(channel=self.channel, self_mute=self_mute, self_deaf=self_deaf)
+            await asyncio.wait_for(self.connected.wait(), timeout=timeout)
         except BaseException as e:
             await self.disconnect()
             self.ready.set()
+            self.connected.set()
             raise e
 
     async def play(self, data, type=None, after=None):
-        await self.ready.wait()
+        await self.connected.wait()
         await self.ws.send_json({
             "t": "PLAY",
             "d": {
@@ -277,21 +284,21 @@ class VoiceClientModel(discord.VoiceClient):
         self.callback = after
 
     async def stop(self):
-        await self.ready.wait()
+        await self.connected.wait()
         await self.ws.send_json({"t": "STOP"})
 
     async def set_volume(self, volume):
-        await self.ready.wait()
+        await self.connected.wait()
         await self.ws.send_json({"t": "VOLUME", "d": volume})
         self.volume = volume
 
     async def pause(self) -> None:
-        await self.ready.wait()
+        await self.connected.wait()
         await self.ws.send_json({"t": "PAUSE"})
         self._is_paused = True
 
     async def resume(self) -> None:
-        await self.ready.wait()
+        await self.connected.wait()
         await self.ws.send_json({"t": "RESUME"})
         self._is_paused = False
 
