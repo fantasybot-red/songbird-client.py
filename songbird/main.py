@@ -133,25 +133,26 @@ def empty_audio(*, ms, samplerate=48000, num_channels=2):
 
 
 class VoiceClientModel(discord.VoiceClient):
-    audio_list = {}
-    khown_ssrc = {}
-    decode_mode = False
-    node = None
-    callback = None
-    volume = 100
-    ready = asyncio.Event()
-    connected = asyncio.Event()
-    session = None
-    ws = None
-    _is_paused = False
 
     def __init__(self, node_manager_key: str, client: discord.Client,
-                 channel: Union[discord.channel.VoiceChannel, discord.abc.Connectable]):
+                 channel: Union[discord.channel.VoiceChannel, discord.abc.Connectable], *, decode_mode: bool=False):
         self.node_manager: NodeManager = getattr(client, node_manager_key, None)
         if type(self.node_manager) is not NodeManager:
             raise SongBirdError(f"{type(self.node_manager).__name__} is not NodeManager")
         self.client = client
         self.channel = channel
+        # environment variables
+        self.audio_list = {}
+        self.khown_ssrc = {}
+        self.decode_mode = decode_mode
+        self.node = None
+        self.callback = None
+        self.volume = 100
+        self.ready = asyncio.Event()
+        self.connected = asyncio.Event()
+        self.session = None
+        self.ws = None
+        self._is_paused = False
 
     def is_paused(self):
         return self._is_paused

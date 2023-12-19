@@ -5,7 +5,6 @@ import numpy
 import pydub
 
 import songbird
-from shazamio import Shazam
 from songbird import VoiceClientModel
 from discord.ext import commands
 
@@ -31,7 +30,7 @@ async def on_ready():
 
 
 class Voice(VoiceClientModel):
-    decode_mode = True # set True if you want to decode voice packet default ís False
+    decode_mode = True  # set True if you want to decode voice packet default ís False
 
     def __init__(self, *args, **kwargs):
         # set same key name that you to set NodeManager in bot
@@ -64,6 +63,7 @@ async def play(ctx: commands.Context, *, data):
             return
 
     voice_client = await ctx.author.voice.channel.connect(cls=Voice)
+    mess = await ctx.send("Loading...")
 
     async def print_data(is_err):
         print(is_err)
@@ -71,9 +71,9 @@ async def play(ctx: commands.Context, *, data):
             await mess.edit(content="audio Error")
         await voice_client.disconnect()
 
-    # type == None for url == "youtube" for youtube video support
-    await voice_client.play(data, after=print_data)
-    mess = await ctx.send(f'Playing: {data}')
+    # type == None for type == "youtube" for youtube video support
+    await voice_client.play(data, type="youtube", after=print_data)
+    await mess.edit(content=f'Playing: {data}')
 
 
 @bot.command(name="rs")
@@ -92,7 +92,7 @@ async def record_flush(ctx: commands.Context):
     if ctx.author.voice is None:
         await ctx.send("You are not connected to a voice channel.")
         return
-    out:pydub.AudioSegment = await ctx.guild.voice_client.flush_all()
+    out: pydub.AudioSegment = await ctx.guild.voice_client.flush_all()
     out_file = io.BytesIO()
     out.export(out_file, format="wav")
     file = discord.File(out_file, filename="output.wav")
@@ -116,5 +116,6 @@ async def _out(ctx: commands.Context):
 
     await ctx.voice_client.disconnect()
     await ctx.send("Left the voice channel.")
+
 
 bot.run('bot token')
