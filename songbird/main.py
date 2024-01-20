@@ -6,7 +6,6 @@ import time
 from typing import Union, List
 import aiohttp
 import discord
-import pedalboard
 import pydub
 from pedalboard_native.io import AudioFile
 
@@ -30,7 +29,7 @@ class Node:
     async def status(self):
         try:
             return (await req_get(self.host, "/status", self.auth, 3))["players"], self
-        except BaseException as e:
+        except TimeoutError:
             return
 
 
@@ -135,7 +134,7 @@ def empty_audio(*, ms, samplerate=48000, num_channels=2):
 class VoiceClientModel(discord.VoiceClient):
 
     def __init__(self, node_manager_key: str, client: discord.Client,
-                 channel: Union[discord.channel.VoiceChannel, discord.abc.Connectable], *, decode_mode: bool=False):
+                 channel: Union[discord.channel.VoiceChannel, discord.abc.Connectable], *, decode_mode: bool = False):
         self.node_manager: NodeManager = getattr(client, node_manager_key, None)
         if type(self.node_manager) is not NodeManager:
             raise SongBirdError(f"{type(self.node_manager).__name__} is not NodeManager")
@@ -151,7 +150,7 @@ class VoiceClientModel(discord.VoiceClient):
         self.ready = asyncio.Event()
         self.connected = asyncio.Event()
         self.session = None
-        self.ws = None
+        self.ws_connection = None
         self._is_paused = False
 
     def is_paused(self):
@@ -159,18 +158,23 @@ class VoiceClientModel(discord.VoiceClient):
 
     async def on_voice_state_update(self, data: dict) -> None:
         await self.ready.wait()
-        if self.ws is None:
+        if self.ws_connection is None:
             return
-        await self.ws.send_json({
+        elif data["channel_id"] is None:
+            pass
+        elif int(data["channel_id"]) != self.channel.id:
+            self.channel = self.client.get_channel(data["channel_id"])
+
+        await self.ws_connection.send_json({
             "t": "VOICE_STATE_UPDATE",
             "d": data
         })
 
     async def on_voice_server_update(self, data: dict) -> None:
         await self.ready.wait()
-        if self.ws is None:
+        if self.ws_connection is None:
             return
-        await self.ws.send_json({
+        await self.ws_connection.send_json({
             "t": "VOICE_SERVER_UPDATE",
             "d": data
         })
@@ -178,8 +182,8 @@ class VoiceClientModel(discord.VoiceClient):
     async def heartbeat(self):
         while True:
             await asyncio.sleep(30)
-            if not self.ws.closed:
-                await self.ws.send_json({
+            if not self.ws_connection.closed:
+                await self.ws_connection.send_json({
                     "t": "PING"
                 })
             else:
@@ -230,12 +234,11 @@ class VoiceClientModel(discord.VoiceClient):
             self.audio_list[data['ssrc']] = [audio_dict]
 
     async def ws_read(self):
-        async for i in self.ws:
+        async for i in self.ws_connection:
             if i.type == aiohttp.WSMsgType.TEXT:
                 data = i.json()
-                if data['t'] == "CONNECTED":
-                    self.connected.set()
-                elif data['t'] == "STOP" and self.callback is not None:
+                print(data)
+                if data['t'] == "STOP" and self.callback is not None:
                     asyncio.create_task(self.callback(False))
                     self._is_paused = False
                 elif data['t'] == "STOP_ERROR" and self.callback is not None:
@@ -246,36 +249,40 @@ class VoiceClientModel(discord.VoiceClient):
                         asyncio.create_task(self.decode_voice_packet(data['d']))
                 elif data['t'] == "SSRC_UPDATE":
                     self.khown_ssrc[data['d']['ssrc']] = data['d']['user']
+                elif data['t'] == "P_STATE":
+                    self._is_paused = (not data['d'])
             elif i.type == aiohttp.WSMsgType.CLOSED:
                 break
             elif i.type == aiohttp.WSMsgType.ERROR:
                 break
-        await self.ws.close()
+        await self.ws_connection.close()
         await self.session.close()
         await self.disconnect()
 
     async def connect_ws(self):
-        self.session, self.ws = await self.node.connect()
+        self.session, self.ws_connection = await self.node.connect()
+        await self.ws_connection.send_json({"user_id": self.client.user.id, "guild_id": self.channel.guild.id})
         asyncio.create_task(self.ws_read())
         asyncio.create_task(self.heartbeat())
 
     async def connect(self, *, timeout: float = 60.0, reconnect: bool = True, self_deaf: bool = False,
                       self_mute: bool = False) -> None:
-        self.node = await self.node_manager.get_best_node(self.channel.rtc_region)
+        try:
+            self.node = await self.node_manager.get_best_node(self.channel.rtc_region)
+        except Exception as e:
+            self.cleanup()
+            raise e
         try:
             await self.connect_ws()
-            self.ready.set()  # for safety
+            self.ready.set()
             await self.channel.guild.change_voice_state(channel=self.channel, self_mute=self_mute, self_deaf=self_deaf)
-            await asyncio.wait_for(self.connected.wait(), timeout=timeout)
         except BaseException as e:
             await self.disconnect()
             self.ready.set()
-            self.connected.set()
             raise e
 
     async def play(self, data, type=None, after=None):
-        await self.connected.wait()
-        await self.ws.send_json({
+        await self.ws_connection.send_json({
             "t": "PLAY",
             "d": {
                 "url": data,
@@ -285,27 +292,22 @@ class VoiceClientModel(discord.VoiceClient):
         self.callback = after
 
     async def stop(self):
-        await self.connected.wait()
-        await self.ws.send_json({"t": "STOP"})
+        await self.ws_connection.send_json({"t": "STOP"})
 
     async def set_volume(self, volume):
-        await self.connected.wait()
-        await self.ws.send_json({"t": "VOLUME", "d": volume})
+        await self.ws_connection.send_json({"t": "VOLUME", "d": volume})
         self.volume = volume
 
     async def pause(self) -> None:
-        await self.connected.wait()
-        await self.ws.send_json({"t": "PAUSE"})
-        self._is_paused = True
+        await self.ws_connection.send_json({"t": "PAUSE"})
 
     async def resume(self) -> None:
-        await self.connected.wait()
-        await self.ws.send_json({"t": "RESUME"})
-        self._is_paused = False
+        await self.ws_connection.send_json({"t": "RESUME"})
 
     async def disconnect(self, *, force: bool = False) -> None:
-        if self.ws is not None:
-            await self.ws.close()
-        await self.session.close()
+        if self.ws_connection is not None:
+            await self.ws_connection.close()
+        if self.session is not None:
+            await self.session.close()
         await self.channel.guild.change_voice_state(channel=None)
         self.cleanup()
