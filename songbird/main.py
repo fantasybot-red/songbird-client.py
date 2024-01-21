@@ -160,10 +160,6 @@ class VoiceClientModel(discord.VoiceClient):
         await self.ready.wait()
         if self.ws_connection is None:
             return
-        elif data["channel_id"] is None:
-            pass
-        elif int(data["channel_id"]) != self.channel.id:
-            self.channel = self.client.get_channel(data["channel_id"])
 
         await self.ws_connection.send_json({
             "t": "VOICE_STATE_UPDATE",
@@ -237,8 +233,9 @@ class VoiceClientModel(discord.VoiceClient):
         async for i in self.ws_connection:
             if i.type == aiohttp.WSMsgType.TEXT:
                 data = i.json()
-                print(data)
-                if data['t'] == "STOP" and self.callback is not None:
+                if data['t'] == "CONNECTED":
+                    self.connected.set()
+                elif data['t'] == "STOP" and self.callback is not None:
                     asyncio.create_task(self.callback(False))
                     self._is_paused = False
                 elif data['t'] == "STOP_ERROR" and self.callback is not None:
@@ -251,9 +248,7 @@ class VoiceClientModel(discord.VoiceClient):
                     self.khown_ssrc[data['d']['ssrc']] = data['d']['user']
                 elif data['t'] == "P_STATE":
                     self._is_paused = (not data['d'])
-            elif i.type == aiohttp.WSMsgType.CLOSED:
-                break
-            elif i.type == aiohttp.WSMsgType.ERROR:
+            else:
                 break
         await self.ws_connection.close()
         await self.session.close()
@@ -282,6 +277,7 @@ class VoiceClientModel(discord.VoiceClient):
             raise e
 
     async def play(self, data, type=None, after=None):
+        await self.connected.wait()
         await self.ws_connection.send_json({
             "t": "PLAY",
             "d": {
@@ -292,16 +288,20 @@ class VoiceClientModel(discord.VoiceClient):
         self.callback = after
 
     async def stop(self):
+        await self.connected.wait()
         await self.ws_connection.send_json({"t": "STOP"})
 
     async def set_volume(self, volume):
+        await self.connected.wait()
         await self.ws_connection.send_json({"t": "VOLUME", "d": volume})
         self.volume = volume
 
     async def pause(self) -> None:
+        await self.connected.wait()
         await self.ws_connection.send_json({"t": "PAUSE"})
 
     async def resume(self) -> None:
+        await self.connected.wait()
         await self.ws_connection.send_json({"t": "RESUME"})
 
     async def disconnect(self, *, force: bool = False) -> None:
