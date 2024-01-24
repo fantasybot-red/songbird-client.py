@@ -133,6 +133,21 @@ def empty_audio(*, ms, samplerate=48000, num_channels=2):
 
 class VoiceClientModel(discord.VoiceClient):
 
+    async def event_callback(self, event: str) -> None:
+        pass
+
+    def __getattribute__(self, item: str):
+        attr_data = super().__getattribute__(item)
+        checker = item == "event_callback" or item.startswith(("_", "on_"))
+        if asyncio.iscoroutinefunction(attr_data) and (not checker):
+            async def proxy_async(*args, **kwargs):
+                data = await attr_data(*args, **kwargs)
+                asyncio.create_task(self.event_callback(item))
+                return data
+
+            return proxy_async
+        return attr_data
+
     def __init__(self, node_manager_key: str, client: discord.Client,
                  channel: Union[discord.channel.VoiceChannel, discord.abc.Connectable], *, decode_mode: bool = False):
         self.node_manager: NodeManager = getattr(client, node_manager_key, None)
@@ -152,6 +167,7 @@ class VoiceClientModel(discord.VoiceClient):
         self.session = None
         self.ws_connection = None
         self._is_paused = False
+        self._is_disconnected = False
 
     def is_paused(self):
         return self._is_paused
@@ -175,7 +191,7 @@ class VoiceClientModel(discord.VoiceClient):
             "d": data
         })
 
-    async def heartbeat(self):
+    async def _heartbeat(self):
         while True:
             await asyncio.sleep(30)
             if not self.ws_connection.closed:
@@ -185,7 +201,7 @@ class VoiceClientModel(discord.VoiceClient):
             else:
                 break
 
-    def sync_flush_all(self):
+    def _sync_flush_all(self):
         list_voice = []
         data_all = self.audio_list.copy().items()
         for k, v in data_all:
@@ -218,9 +234,9 @@ class VoiceClientModel(discord.VoiceClient):
         return min_time["data"]
 
     async def flush_all(self):
-        return await asyncio.to_thread(self.sync_flush_all)
+        return await asyncio.to_thread(self._sync_flush_all)
 
-    async def decode_voice_packet(self, data):
+    async def _decode_voice_packet(self, data):
         bytes_data = base64.urlsafe_b64decode(data["data"])
         audio_bytes = io.BytesIO(bytes_data)
         audio_dict = {"data": audio_bytes, "got_at": time.time() * 1000}
@@ -229,7 +245,7 @@ class VoiceClientModel(discord.VoiceClient):
         else:
             self.audio_list[data['ssrc']] = [audio_dict]
 
-    async def ws_read(self):
+    async def _ws_read(self):
         async for i in self.ws_connection:
             if i.type == aiohttp.WSMsgType.TEXT:
                 data = i.json()
@@ -243,7 +259,7 @@ class VoiceClientModel(discord.VoiceClient):
                     self._is_paused = False
                 elif data['t'] == "VOICE_PACKET":
                     if self.decode_mode:
-                        asyncio.create_task(self.decode_voice_packet(data['d']))
+                        asyncio.create_task(self._decode_voice_packet(data['d']))
                 elif data['t'] == "SSRC_UPDATE":
                     self.khown_ssrc[data['d']['ssrc']] = data['d']['user']
                 elif data['t'] == "P_STATE":
@@ -252,13 +268,14 @@ class VoiceClientModel(discord.VoiceClient):
                 break
         await self.ws_connection.close()
         await self.session.close()
-        await self.disconnect()
+        if not self._is_disconnected:
+            await self.disconnect()
 
-    async def connect_ws(self):
+    async def _connect_ws(self):
         self.session, self.ws_connection = await self.node.connect()
         await self.ws_connection.send_json({"user_id": self.client.user.id, "guild_id": self.channel.guild.id})
-        asyncio.create_task(self.ws_read())
-        asyncio.create_task(self.heartbeat())
+        asyncio.create_task(self._ws_read())
+        asyncio.create_task(self._heartbeat())
 
     async def connect(self, *, timeout: float = 60.0, reconnect: bool = True, self_deaf: bool = False,
                       self_mute: bool = False) -> None:
@@ -268,7 +285,7 @@ class VoiceClientModel(discord.VoiceClient):
             self.cleanup()
             raise e
         try:
-            await self.connect_ws()
+            await self._connect_ws()
             self.ready.set()
             await self.channel.guild.change_voice_state(channel=self.channel, self_mute=self_mute, self_deaf=self_deaf)
         except BaseException as e:
@@ -305,9 +322,12 @@ class VoiceClientModel(discord.VoiceClient):
         await self.ws_connection.send_json({"t": "RESUME"})
 
     async def disconnect(self, *, force: bool = False) -> None:
+        self._is_disconnected = True
         if self.ws_connection is not None:
-            await self.ws_connection.close()
+            if not self.ws_connection.closed:
+                await self.ws_connection.close()
         if self.session is not None:
-            await self.session.close()
+            if not self.session.closed:
+                await self.session.close()
         await self.channel.guild.change_voice_state(channel=None)
         self.cleanup()
